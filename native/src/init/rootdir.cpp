@@ -94,12 +94,17 @@ on property:sys.boot_completed=1
 
 on property:init.svc.zygote=stopped
     exec %2$s 0 0 -- %1$s/magisk --zygote-restart
+
+on property:init.svc.zygote=restarting
+    exec %2$s 0 0 -- %1$s/magisk --zygote-restart
 )EOF", tmp_path, MAGISK_PROC_CON);
 
         fclone_attr(fileno(src.get()), fileno(dest.get()));
     }
 
     // Then patch init.zygote*.rc
+    // Track count to detect virtual machines / emulators that have no separate zygote rc files
+    int zygote_rc_patched = 0;
     for (dirent *entry; (entry = readdir(src_dir.get()));) {
         auto name = std::string_view(entry->d_name);
         if (!name.starts_with("init.zygote") || !name.ends_with(".rc")) continue;
@@ -122,6 +127,15 @@ on property:init.svc.zygote=stopped
             return true;
         });
         fclone_attr(fileno(src.get()), fileno(dest.get()));
+        zygote_rc_patched++;
+    }
+    // Virtual machines (e.g. LightSpeed/GuangSu VM) often keep zygote service definitions
+    // inline in init.rc with no separate init.zygote*.rc files.  In that case the
+    // onrestart injection above is skipped, but the property-based triggers we already
+    // wrote into init.rc ("on property:init.svc.zygote=restarting/stopped") act as a
+    // reliable fallback -- no extra work needed here.
+    if (zygote_rc_patched == 0) {
+        LOGD("No init.zygote*.rc found, relying on property-based zygote-restart triggers\n");
     }
 }
 
