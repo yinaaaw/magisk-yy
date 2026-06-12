@@ -246,7 +246,7 @@ def run_ndk_build(flags):
         error("Build binary failed!")
     os.chdir("..")
     for arch in archs:
-        for tgt in support_targets + ["libinit-ld.so"]:
+        for tgt in support_targets + ["libinit-ld.so", "libzygisk-ld.so"]:
             source = op.join("native", "libs", arch, tgt)
             target = op.join("native", "out", arch, tgt)
             mv(source, target)
