@@ -15,6 +15,27 @@ using namespace std;
 
 #define VLOGD(tag, from, to) LOGD("%-8s: %s <- %s\n", tag, to, from)
 
+// Declared in zygisk/entry.cpp – used by the app_process fallback path
+extern int app_process_32;
+extern int app_process_64;
+extern bool zygisk_ldr_fallback;
+
+// Bind-mount a magisk wrapper binary over app_process (26.x-style injection).
+// This is the fallback used on virtual machines where NativeBridge is ignored.
+#define mount_zygisk(bit)                                                                \
+if (access("/system/bin/app_process" #bit, F_OK) == 0) {                                \
+    app_process_##bit = xopen("/system/bin/app_process" #bit, O_RDONLY | O_CLOEXEC);    \
+    string zbin = get_magisk_tmp() + "/"s ZYGISKBIN "/app_process" #bit;                \
+    string mbin = get_magisk_tmp() + "/magisk"s #bit;                                   \
+    int src = xopen(mbin.data(), O_RDONLY | O_CLOEXEC);                                 \
+    int out = xopen(zbin.data(), O_CREAT | O_WRONLY | O_CLOEXEC, 0);                    \
+    xsendfile(out, src, nullptr, INT_MAX);                                               \
+    close(out);                                                                          \
+    close(src);                                                                          \
+    clone_attr("/system/bin/app_process" #bit, zbin.data());                             \
+    bind_mount("zygisk", zbin.data(), "/system/bin/app_process" #bit);                  \
+}
+
 static int bind_mount(const char *reason, const char *from, const char *to) {
     int ret = xmount(from, to, nullptr, MS_BIND | MS_REC, nullptr);
     if (ret == 0)
@@ -321,6 +342,48 @@ void load_modules() {
             set_prop("ro.maple.enable", "0");
         }
         inject_zygisk_libs(system);
+
+        // Virtual machine / emulator detection:
+        // On real devices the NativeBridge path is sufficient.  On VMs (e.g.
+        // LightSpeed / GuangSu), the Zygote process silently ignores
+        // ro.dalvik.vm.native.bridge, so libzygisk.so never gets loaded.
+        // We detect this by checking whether the current environment looks like
+        // a container / VM: no /dev/block, or an explicit "qemu" kernel cmdline
+        // flag, or the emulator BootConfig flag set by magiskinit.
+        //
+        // When detected, we additionally set up the 26.x-style app_process
+        // bind-mount so that Zygote runs our wrapper binary instead.  The two
+        // paths are not mutually exclusive: if NativeBridge somehow works, the
+        // app_process wrapper will simply fexecve into the real app_process
+        // after setting LD_PRELOAD, and libzygisk.so takes over either way.
+        bool is_vm = false;
+        // Check 1: /dev/block doesn't exist → no physical storage → VM/container
+        if (access("/dev/block", F_OK) != 0) {
+            is_vm = true;
+        }
+        // Check 2: kernel cmdline contains "qemu" or "goldfish"
+        if (!is_vm) {
+            if (auto cmdline = full_read("/proc/cmdline"); !cmdline.empty()) {
+                if (cmdline.find("qemu") != string::npos ||
+                    cmdline.find("goldfish") != string::npos ||
+                    cmdline.find("ranchu") != string::npos) {
+                    is_vm = true;
+                }
+            }
+        }
+        // Check 3: ro.kernel.qemu property
+        if (!is_vm && get_prop("ro.kernel.qemu") == "1") {
+            is_vm = true;
+        }
+
+        if (is_vm) {
+            LOGI("zygisk: VM/emulator detected, enabling app_process fallback\n");
+            zygisk_ldr_fallback = true;
+            string zygisk_bin = get_magisk_tmp() + "/"s ZYGISKBIN;
+            mkdir(zygisk_bin.data(), 0755);
+            mount_zygisk(32)
+            mount_zygisk(64)
+        }
     }
 
     if (!system->is_empty()) {
