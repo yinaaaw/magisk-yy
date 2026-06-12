@@ -226,26 +226,42 @@ fun Project.setupApp() {
         into("src/main/jniLibs")
         into("armeabi-v7a") {
             from(rootProject.file("native/out/armeabi-v7a")) {
-                include("busybox", "magiskboot", "magiskinit", "magiskpolicy", "magisk")
-                rename { if (it == "magisk") "libmagisk32.so" else "lib$it.so" }
+                include("busybox", "magiskboot", "magiskinit", "magiskpolicy", "magisk", "libzygisk-ld.so")
+                rename { when (it) {
+                    "magisk" -> "libmagisk32.so"
+                    "libzygisk-ld.so" -> "libzygisk-ld.so"
+                    else -> "lib$it.so"
+                } }
             }
         }
         into("x86") {
             from(rootProject.file("native/out/x86")) {
-                include("busybox", "magiskboot", "magiskinit", "magiskpolicy", "magisk")
-                rename { if (it == "magisk") "libmagisk32.so" else "lib$it.so" }
+                include("busybox", "magiskboot", "magiskinit", "magiskpolicy", "magisk", "libzygisk-ld.so")
+                rename { when (it) {
+                    "magisk" -> "libmagisk32.so"
+                    "libzygisk-ld.so" -> "libzygisk-ld.so"
+                    else -> "lib$it.so"
+                } }
             }
         }
         into("arm64-v8a") {
             from(rootProject.file("native/out/arm64-v8a")) {
-                include("busybox", "magiskboot", "magiskinit", "magiskpolicy", "magisk")
-                rename { if (it == "magisk") "libmagisk64.so" else "lib$it.so" }
+                include("busybox", "magiskboot", "magiskinit", "magiskpolicy", "magisk", "libzygisk-ld.so")
+                rename { when (it) {
+                    "magisk" -> "libmagisk64.so"
+                    "libzygisk-ld.so" -> "libzygisk-ld.so"
+                    else -> "lib$it.so"
+                } }
             }
         }
         into("x86_64") {
             from(rootProject.file("native/out/x86_64")) {
-                include("busybox", "magiskboot", "magiskinit", "magiskpolicy", "magisk")
-                rename { if (it == "magisk") "libmagisk64.so" else "lib$it.so" }
+                include("busybox", "magiskboot", "magiskinit", "magiskpolicy", "magisk", "libzygisk-ld.so")
+                rename { when (it) {
+                    "magisk" -> "libmagisk64.so"
+                    "libzygisk-ld.so" -> "libzygisk-ld.so"
+                    else -> "lib$it.so"
+                } }
             }
         }
         onlyIf {
