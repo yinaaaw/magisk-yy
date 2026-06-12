@@ -4,6 +4,7 @@
 #include <sys/mount.h>
 #include <android/log.h>
 #include <android/dlext.h>
+#include <embed.hpp>
 
 #include <base.hpp>
 #include <consts.hpp>
@@ -14,6 +15,15 @@
 using namespace std;
 
 string native_bridge = "0";
+
+// File descriptors for the real app_process binaries, kept open so we can
+// send them to the app_process wrapper via fexecve when using the fallback path.
+int app_process_32 = -1;
+int app_process_64 = -1;
+
+// Set to true when the NativeBridge path didn't load libzygisk (e.g. on VMs).
+// When true we fall back to the 26.x-style app_process bind-mount + LD_PRELOAD path.
+bool zygisk_ldr_fallback = false;
 
 static bool is_compatible_with(uint32_t) {
     zygisk_logging();
@@ -27,6 +37,43 @@ extern "C" [[maybe_unused]] NativeBridgeCallbacks NativeBridgeItf{
     .padding = {},
     .isCompatibleWith = &is_compatible_with,
 };
+
+// The following two functions are called by loader.c via LD_PRELOAD (app_process fallback).
+// They run inside the Zygote process after fexecve into the real app_process binary.
+
+static void *self_handle = nullptr;
+
+extern "C" void unload_first_stage() {
+    ZLOGD("unloading first stage\n");
+    // The loader .so was bind-mounted over a system binary; detach it.
+    xumount2(HIJACK_BIN, MNT_DETACH);
+}
+
+extern "C" void zygisk_inject_entry(void *handle) {
+    zygisk_logging();
+    ZLOGD("load success (app_process fallback)\n");
+
+    // Strip our own entry from LD_PRELOAD so child processes are clean
+    if (char *ld = getenv("LD_PRELOAD")) {
+        string env = ld;
+        // Remove HIJACK_BIN from the colon-separated list
+        string token = HIJACK_BIN;
+        size_t pos = env.find(token);
+        if (pos != string::npos) {
+            if (pos > 0 && env[pos - 1] == ':')
+                env.erase(pos - 1, token.size() + 1);
+            else
+                env.erase(pos, token.size() + (env[pos + token.size()] == ':' ? 1 : 0));
+        }
+        if (env.empty())
+            unsetenv("LD_PRELOAD");
+        else
+            setenv("LD_PRELOAD", env.data(), 1);
+    }
+
+    self_handle = handle;
+    hook_functions();
+}
 
 // The following code runs in zygote/app process
 
@@ -190,6 +237,40 @@ void zygisk_handler(int client, const sock_cred *cred) {
     int code = read_int(client);
     char buf[256];
     switch (code) {
+    case ZygiskRequest::SETUP: {
+        // app_process fallback path (used on VMs where NativeBridge is ignored).
+        // Mirror the 26.x setup_files() logic: bind-mount the loader .so over a
+        // throwaway system binary, then hand the real app_process fd back so the
+        // wrapper can fexecve into it with LD_PRELOAD pointing at the loader.
+        LOGD("zygisk: setup files (fallback) for pid=[%d]\n", cred->pid);
+        if (!get_exe(cred->pid, buf, sizeof(buf))) {
+            write_int(client, 1);
+            break;
+        }
+        bool is_64_bit = str_ends(buf, "64");
+        const char *hbin = is_64_bit ? HIJACK_BIN64 : HIJACK_BIN32;
+        string mbin = get_magisk_tmp() + "/"s ZYGISKBIN + (is_64_bit ? "/loader64.so" : "/loader32.so");
+        int app_fd = is_64_bit ? app_process_64 : app_process_32;
+        if (app_fd < 0) {
+            write_int(client, 1);
+            break;
+        }
+        // Ack
+        write_int(client, 0);
+        // Receive loader bytes and bind-mount over hijacked binary
+        int ld_fd = xopen(mbin.data(), O_WRONLY | O_TRUNC | O_CREAT | O_CLOEXEC, 0755);
+        string ld_data = read_string(client);
+        xwrite(ld_fd, ld_data.data(), ld_data.size());
+        close(ld_fd);
+        xmount(mbin.data(), hbin, nullptr, MS_BIND, nullptr);
+        send_fd(client, app_fd);
+        break;
+    }
+    case ZygiskRequest::PASSTHROUGH:
+        // Non-zygote app_process call (e.g. adb shell) on fallback path.
+        write_int(client, 0);
+        send_fd(client, read_int(client) ? app_process_64 : app_process_32);
+        break;
     case ZygiskRequest::GET_INFO:
         get_process_info(client, cred);
         break;
