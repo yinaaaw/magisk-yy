@@ -11,6 +11,11 @@
 
 // tmpfs paths
 #define INTLROOT      ".magisk"
+#define ZYGISKBIN     INTLROOT "/zygisk"
+
+// Hijack system binaries used as LD_PRELOAD hosts for the app_process fallback
+#define HIJACK_BIN64  "/system/bin/appwidget"
+#define HIJACK_BIN32  "/system/bin/bu"
 #define MIRRDIR       INTLROOT "/mirror"
 #define PREINITMIRR   INTLROOT "/preinit"
 #define BLOCKDIR      INTLROOT "/block"
