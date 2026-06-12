@@ -265,7 +265,7 @@ fun Project.setupApp() {
             }
         }
         onlyIf {
-            if (inputs.sourceFiles.files.size != 20)
+            if (inputs.sourceFiles.files.size != 24)
                 throw StopExecutionException("Please build binaries first! (./build.py binary)")
             true
         }
