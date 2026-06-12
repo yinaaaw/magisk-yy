@@ -1,7 +1,6 @@
 #include <sys/mount.h>
 #include <android/dlext.h>
 #include <dlfcn.h>
-#include <stdio.h>
 
 #include <consts.hpp>
 #include <base.hpp>
@@ -15,7 +14,7 @@ using namespace std;
 // fexecve is not available in Magisk's custom NDK sysroot; emulate it via /proc/self/fd.
 static void exec_fd(int fd, char *const argv[], char *const envp[]) {
     char path[32];
-    snprintf(path, sizeof(path), "/proc/self/fd/%d", fd);
+    ssprintf(path, sizeof(path), "/proc/self/fd/%d", fd);
     execve(path, argv, envp);
 }
 
