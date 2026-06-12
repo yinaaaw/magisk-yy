@@ -4,7 +4,6 @@
 #include <sys/mount.h>
 #include <android/log.h>
 #include <android/dlext.h>
-#include <embed.hpp>
 
 #include <base.hpp>
 #include <consts.hpp>
@@ -239,9 +238,9 @@ void zygisk_handler(int client, const sock_cred *cred) {
     switch (code) {
     case ZygiskRequest::SETUP: {
         // app_process fallback path (used on VMs where NativeBridge is ignored).
-        // Mirror the 26.x setup_files() logic: bind-mount the loader .so over a
-        // throwaway system binary, then hand the real app_process fd back so the
-        // wrapper can fexecve into it with LD_PRELOAD pointing at the loader.
+        // The loader .so is already placed on disk by load_modules() via the
+        // mount_zygisk macro; we just need to bind-mount it over a hijacked
+        // system binary and hand back the real app_process fd.
         LOGD("zygisk: setup files (fallback) for pid=[%d]\n", cred->pid);
         if (!get_exe(cred->pid, buf, sizeof(buf))) {
             write_int(client, 1);
@@ -255,13 +254,13 @@ void zygisk_handler(int client, const sock_cred *cred) {
             write_int(client, 1);
             break;
         }
+        if (access(mbin.data(), F_OK) != 0) {
+            LOGW("zygisk: loader not found: %s\n", mbin.data());
+            write_int(client, 1);
+            break;
+        }
         // Ack
         write_int(client, 0);
-        // Receive loader bytes and bind-mount over hijacked binary
-        int ld_fd = xopen(mbin.data(), O_WRONLY | O_TRUNC | O_CREAT | O_CLOEXEC, 0755);
-        string ld_data = read_string(client);
-        xwrite(ld_fd, ld_data.data(), ld_data.size());
-        close(ld_fd);
         xmount(mbin.data(), hbin, nullptr, MS_BIND, nullptr);
         send_fd(client, app_fd);
         break;
