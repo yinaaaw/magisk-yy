@@ -6,7 +6,6 @@
 #include <base.hpp>
 #include <core.hpp>
 #include <selinux.hpp>
-#include <embed.hpp>
 
 #include "zygisk.hpp"
 
@@ -59,10 +58,6 @@ int app_process_main(int argc, char *argv[]) {
         do {
             if (read_int(socket) != 0)
                 break;
-
-            // Send over zygisk loader bytes
-            write_int(socket, sizeof(zygisk_ld));
-            xwrite(socket, zygisk_ld, sizeof(zygisk_ld));
 
             int app_proc_fd = recv_fd(socket);
             if (app_proc_fd < 0)
