@@ -1,6 +1,7 @@
 #include <sys/mount.h>
 #include <android/dlext.h>
 #include <dlfcn.h>
+#include <stdio.h>
 
 #include <consts.hpp>
 #include <base.hpp>
@@ -10,6 +11,13 @@
 #include "zygisk.hpp"
 
 using namespace std;
+
+// fexecve is not available in Magisk's custom NDK sysroot; emulate it via /proc/self/fd.
+static void exec_fd(int fd, char *const argv[], char *const envp[]) {
+    char path[32];
+    snprintf(path, sizeof(path), "/proc/self/fd/%d", fd);
+    execve(path, argv, envp);
+}
 
 // Entrypoint for app_process overlay (VM fallback path, mirrors 26.x behaviour).
 // When zygisk_ldr_fallback is active, /system/bin/app_process{32,64} is bind-mounted
@@ -49,7 +57,7 @@ int app_process_main(int argc, char *argv[]) {
         if (app_proc_fd < 0) return 1;
         close(fds[0]);
         fcntl(app_proc_fd, F_SETFD, FD_CLOEXEC);
-        fexecve(app_proc_fd, argv, environ);
+        exec_fd(app_proc_fd, argv, environ);
         return 1;
     }
 
@@ -76,7 +84,7 @@ int app_process_main(int argc, char *argv[]) {
 
             close(socket);
             fcntl(app_proc_fd, F_SETFD, FD_CLOEXEC);
-            fexecve(app_proc_fd, argv, environ);
+            exec_fd(app_proc_fd, argv, environ);
         } while (false);
         close(socket);
     }
