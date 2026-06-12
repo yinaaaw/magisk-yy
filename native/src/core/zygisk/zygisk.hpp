@@ -8,12 +8,20 @@
 
 namespace ZygiskRequest {
 enum : int {
+    SETUP,
     GET_INFO,
     CONNECT_COMPANION,
     GET_MODDIR,
+    PASSTHROUGH,
     END
 };
 }
+
+#if defined(__LP64__)
+#define HIJACK_BIN HIJACK_BIN64
+#else
+#define HIJACK_BIN HIJACK_BIN32
+#endif
 
 #if defined(__LP64__)
 #define ZLOGD(...) LOGD("zygisk64: " __VA_ARGS__)
