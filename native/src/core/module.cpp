@@ -21,19 +21,22 @@ extern int app_process_64;
 extern bool zygisk_ldr_fallback;
 
 // Bind-mount a magisk wrapper binary over app_process (26.x-style injection).
-// This is the fallback used on virtual machines where NativeBridge is ignored.
 #define mount_zygisk(bit)                                                                \
 if (access("/system/bin/app_process" #bit, F_OK) == 0) {                                \
     app_process_##bit = xopen("/system/bin/app_process" #bit, O_RDONLY | O_CLOEXEC);    \
-    string zbin = get_magisk_tmp() + "/"s ZYGISKBIN "/app_process" #bit;                \
-    string mbin = get_magisk_tmp() + "/magisk"s #bit;                                   \
-    int src = xopen(mbin.data(), O_RDONLY | O_CLOEXEC);                                 \
-    int out = xopen(zbin.data(), O_CREAT | O_WRONLY | O_CLOEXEC, 0);                    \
-    xsendfile(out, src, nullptr, INT_MAX);                                               \
-    close(out);                                                                          \
-    close(src);                                                                          \
-    clone_attr("/system/bin/app_process" #bit, zbin.data());                             \
-    bind_mount("zygisk", zbin.data(), "/system/bin/app_process" #bit);                  \
+    string _zbin = get_magisk_tmp() + "/"s ZYGISKBIN "/app_process" #bit;               \
+    string _mbin = get_magisk_tmp() + "/magisk"s #bit;                                  \
+    if (access(_mbin.data(), F_OK) == 0) {                                               \
+        int src = xopen(_mbin.data(), O_RDONLY | O_CLOEXEC);                             \
+        int out = xopen(_zbin.data(), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0755);  \
+        xsendfile(out, src, nullptr, INT_MAX);                                           \
+        close(out);                                                                      \
+        close(src);                                                                      \
+        clone_attr("/system/bin/app_process" #bit, _zbin.data());                        \
+        bind_mount("zygisk", _zbin.data(), "/system/bin/app_process" #bit);              \
+    } else {                                                                             \
+        LOGW("zygisk: %s not found, skip app_process" #bit " mount\n", _mbin.data());   \
+    }                                                                                    \
 }
 
 static int bind_mount(const char *reason, const char *from, const char *to) {
