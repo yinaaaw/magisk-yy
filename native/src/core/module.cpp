@@ -329,61 +329,15 @@ void load_modules() {
     }
 
     if (zygisk_enabled) {
-        string native_bridge_orig = get_prop(NBPROP);
-        if (native_bridge_orig.empty()) {
-            native_bridge_orig = "0";
-        }
-        native_bridge = native_bridge_orig != "0" ? ZYGISKLDR + native_bridge_orig : ZYGISKLDR;
-        set_prop(NBPROP, native_bridge.data());
-        // Weather Huawei's Maple compiler is enabled.
-        // If so, system server will be created by a special Zygote which ignores the native bridge
-        // and make system server out of our control. Avoid it by disabling.
-        if (get_prop("ro.maple.enable") == "1") {
-            set_prop("ro.maple.enable", "0");
-        }
-        inject_zygisk_libs(system);
-
-        // Virtual machine / emulator detection:
-        // On real devices the NativeBridge path is sufficient.  On VMs (e.g.
-        // LightSpeed / GuangSu), the Zygote process silently ignores
-        // ro.dalvik.vm.native.bridge, so libzygisk.so never gets loaded.
-        // We detect this by checking whether the current environment looks like
-        // a container / VM: no /dev/block, or an explicit "qemu" kernel cmdline
-        // flag, or the emulator BootConfig flag set by magiskinit.
-        //
-        // When detected, we additionally set up the 26.x-style app_process
-        // bind-mount so that Zygote runs our wrapper binary instead.  The two
-        // paths are not mutually exclusive: if NativeBridge somehow works, the
-        // app_process wrapper will simply fexecve into the real app_process
-        // after setting LD_PRELOAD, and libzygisk.so takes over either way.
-        bool is_vm = false;
-        // Check 1: /dev/block doesn't exist → no physical storage → VM/container
-        if (access("/dev/block", F_OK) != 0) {
-            is_vm = true;
-        }
-        // Check 2: kernel cmdline contains "qemu" or "goldfish"
-        if (!is_vm) {
-            if (auto cmdline = full_read("/proc/cmdline"); !cmdline.empty()) {
-                if (cmdline.find("qemu") != string::npos ||
-                    cmdline.find("goldfish") != string::npos ||
-                    cmdline.find("ranchu") != string::npos) {
-                    is_vm = true;
-                }
-            }
-        }
-        // Check 3: ro.kernel.qemu property
-        if (!is_vm && get_prop("ro.kernel.qemu") == "1") {
-            is_vm = true;
-        }
-
-        if (is_vm) {
-            LOGI("zygisk: VM/emulator detected, enabling app_process fallback\n");
-            zygisk_ldr_fallback = true;
-            string zygisk_bin = get_magisk_tmp() + "/"s ZYGISKBIN;
-            mkdir(zygisk_bin.data(), 0755);
-            mount_zygisk(32)
-            mount_zygisk(64)
-        }
+        // Use 26.x-style app_process bind-mount injection exclusively.
+        // The NativeBridge (ro.dalvik.vm.native.bridge) approach used in stock 27.0
+        // is silently ignored by many environments (virtual machines, containers, etc.).
+        // Directly replacing app_process is universally reliable.
+        zygisk_ldr_fallback = true;
+        string zygisk_bin = get_magisk_tmp() + "/"s ZYGISKBIN;
+        mkdir(zygisk_bin.data(), 0755);
+        mount_zygisk(32)
+        mount_zygisk(64)
     }
 
     if (!system->is_empty()) {
