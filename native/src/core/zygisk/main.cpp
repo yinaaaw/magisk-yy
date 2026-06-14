@@ -11,18 +11,14 @@
 
 using namespace std;
 
-// fexecve is not available in Magisk's custom NDK sysroot; emulate it via /proc/self/fd.
+// fexecve is not available in Magisk's NDK sysroot; use /proc/self/fd instead
 static void exec_fd(int fd, char *const argv[], char *const envp[]) {
     char path[32];
     ssprintf(path, sizeof(path), "/proc/self/fd/%d", fd);
     execve(path, argv, envp);
 }
 
-// Entrypoint for app_process overlay (VM fallback path, mirrors 26.x behaviour).
-// When zygisk_ldr_fallback is active, /system/bin/app_process{32,64} is bind-mounted
-// to a copy of the magisk binary, which exec's here.  We request the real
-// app_process fd from magiskd, inject LD_PRELOAD pointing at the loader .so,
-// and fexecve into the real binary so Zygote starts normally with our hook loaded.
+// Entrypoint for app_process overlay (mirrors 26.x behaviour)
 int app_process_main(int argc, char *argv[]) {
     android_logging();
     char buf[PATH_MAX];
@@ -34,7 +30,7 @@ int app_process_main(int argc, char *argv[]) {
     }
 
     if (!zygote) {
-        // Non-zygote call (e.g. adb shell app_process) — passthrough to the real binary.
+        // Non-zygote (e.g. adb shell app_process): relay via passthrough
         int fds[2];
         socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, fds);
         if (fork_dont_care() == 0) {
@@ -53,32 +49,44 @@ int app_process_main(int argc, char *argv[]) {
             return 1;
         }
         int app_proc_fd = recv_fd(fds[0]);
-        if (app_proc_fd < 0) return 1;
+        if (app_proc_fd < 0)
+            return 1;
         close(fds[0]);
         fcntl(app_proc_fd, F_SETFD, FD_CLOEXEC);
         exec_fd(app_proc_fd, argv, environ);
         return 1;
     }
 
-    // Zygote path: request SETUP from magiskd, get the real app_process fd back.
     if (int socket = zygisk_request(ZygiskRequest::SETUP); socket >= 0) {
         do {
             if (read_int(socket) != 0)
                 break;
 
+            // Read loader .so from disk and send to magiskd
+            bool is_64_bit;
+#if defined(__LP64__)
+            is_64_bit = true;
+#else
+            is_64_bit = false;
+#endif
+            string loader_path = get_magisk_tmp() + "/"s ZYGISKBIN
+                                 + (is_64_bit ? "/loader64.so" : "/loader32.so");
+            string loader_data = full_read(loader_path.data());
+            if (loader_data.empty())
+                break;
+            write_string(socket, loader_data);
+
             int app_proc_fd = recv_fd(socket);
             if (app_proc_fd < 0)
                 break;
 
-            // Inject LD_PRELOAD so the loader .so gets mapped into the real Zygote
-            const char *hbin = HIJACK_BIN;
             if (char *ld = getenv("LD_PRELOAD")) {
                 string env = ld;
                 env += ':';
-                env += hbin;
+                env += HIJACK_BIN;
                 setenv("LD_PRELOAD", env.data(), 1);
             } else {
-                setenv("LD_PRELOAD", hbin, 1);
+                setenv("LD_PRELOAD", HIJACK_BIN, 1);
             }
 
             close(socket);
@@ -88,18 +96,16 @@ int app_process_main(int argc, char *argv[]) {
         close(socket);
     }
 
-    // Error fallback: unmount ourselves and exec the real app_process
+    // Error fallback: unmount and exec real app_process
     xreadlink("/proc/self/exe", buf, sizeof(buf));
     xumount2("/proc/self/exe", MNT_DETACH);
-    execve(static_cast<const char *>(buf), argv, environ);
+    execve(buf, argv, environ);
     return 1;
 }
 
 static void zygiskd(int socket) {
     if (getuid() != 0 || fcntl(socket, F_GETFD) < 0)
         exit(-1);
-
-    init_thread_pool();
 
 #if defined(__LP64__)
     set_nice_name("zygiskd64");
@@ -109,7 +115,6 @@ static void zygiskd(int socket) {
     LOGI("* Launching zygiskd32\n");
 #endif
 
-    // Load modules
     using comp_entry = void(*)(int);
     vector<comp_entry> modules;
     {
@@ -133,32 +138,24 @@ static void zygiskd(int socket) {
         }
     }
 
-    // ack
     write_int(socket, 0);
 
-    // Start accepting requests
     pollfd pfd = { socket, POLLIN, 0 };
     for (;;) {
         poll(&pfd, 1, -1);
         if (pfd.revents && !(pfd.revents & POLLIN)) {
-            // Something bad happened in magiskd, terminate zygiskd
             exit(0);
         }
         int client = recv_fd(socket);
         if (client < 0) {
-            // Something bad happened in magiskd, terminate zygiskd
             exit(0);
         }
         int module_id = read_int(client);
-        if (module_id >= 0 && module_id < modules.size() && modules[module_id]) {
+        if (module_id >= 0 && module_id < (int)modules.size() && modules[module_id]) {
             exec_task([=, entry = modules[module_id]] {
                 struct stat s1;
                 fstat(client, &s1);
                 entry(client);
-                // Only close client if it is the same file so we don't
-                // accidentally close a re-used file descriptor.
-                // This check is required because the module companion
-                // handler could've closed the file descriptor already.
                 if (struct stat s2; fstat(client, &s2) == 0) {
                     if (s1.st_dev == s2.st_dev && s1.st_ino == s2.st_ino) {
                         close(client);
@@ -171,19 +168,16 @@ static void zygiskd(int socket) {
     }
 }
 
-// Entrypoint where we need to re-exec ourselves
-// This should only ever be called internally
 int zygisk_main(int argc, char *argv[]) {
     android_logging();
+
     if (argc == 3 && argv[1] == "companion"sv) {
         zygiskd(parse_int(argv[2]));
     } else if (argc == 4 && argv[1] == "passthrough"sv) {
-        // Relay the real app_process fd to the non-zygote caller
         int client = parse_int(argv[2]);
         int is_64_bit = parse_int(argv[3]);
         if (fcntl(client, F_GETFD) < 0)
             return 1;
-        // In 27.x all zygisk requests go through RequestCode::ZYGISK (+RequestCode::ZYGISK)
         if (int magiskd = connect_daemon(+RequestCode::ZYGISK); magiskd >= 0) {
             write_int(magiskd, ZygiskRequest::PASSTHROUGH);
             write_int(magiskd, is_64_bit);
