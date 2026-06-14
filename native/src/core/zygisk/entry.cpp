@@ -309,10 +309,11 @@ void zygisk_handler(int client, const sock_cred *cred) {
 }
 
 void reset_zygisk(bool restore) {
-    static atomic_uint zygote_start_count{1};
     if (restore) {
-        zygote_start_count = 1;
-    } else if (zygote_start_count.fetch_add(1) > 3) {
-        // if zygote restarted more than 3 times, disable zygisk
+        zygote_start_reset(1);
+    } else {
+        // bump restart counter; if zygote keeps crashing we leave it alone
+        zygote_start_counts[0]++;
+        zygote_start_counts[1]++;
     }
 }
